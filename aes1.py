@@ -82,6 +82,7 @@ except IndexError:
 # -- imports -------------------------------------------------------------------
 # ==============================================================================
 
+#send_iot_data = 0 # 0: dont send | 1: send data IoT
 
 import carla
 
@@ -132,6 +133,8 @@ try:
     from pygame.locals import K_g
     from pygame.locals import K_h
     from pygame.locals import K_i
+    from pygame.locals import K_j
+    from pygame.locals import K_k
     from pygame.locals import K_l
     from pygame.locals import K_m
     from pygame.locals import K_n
@@ -414,6 +417,56 @@ class KeyboardControl(object):
                     world.next_weather()
                 elif event.key == K_g:
                     world.toggle_radar()
+                elif event.key == K_j:
+                    world.hud.send_iot_data = 1
+                    #CREATING SEARINGS
+                    print("CREATING SERIES...")
+                    req = REQUEST()
+                    var = get_var_request()
+
+                    t0_stored = int(get_env('T0'))
+                    t1_stored = int(get_env('T1'))
+                    t_now = int(time.time())
+
+                    if (t_now * (10 ** 6) >= t0_stored and t_now * (10 ** 6) <= t1_stored):
+                        t_last = ((t1_stored / (10 ** 6)) - t_now )/60
+
+                        # if (t_last < 2):
+                        #     print("SERIES UPDATED!")
+                        #     t_end = t_now + (60*20)
+                        #
+                        #     #update_env("T0", str(t0_stored))
+                        #     update_env("T1", str(t_end * (10 ** 6)))
+                        #
+                        #     for i in var:
+                        #         qty = i["qty"]
+                        #         unit = i["unit"]
+                        #
+                        #         for dev in range(0, qty):
+                        #             time.sleep(0.5)
+                        #             req.create(unit, dev)
+                        # else:
+                        print(f"SERIES ALREADY CREATED [Still {t_last} min]!")
+
+                    else:
+                        print("SERIES CREATED!")
+                        t_end = t_now + (60*20)
+
+                        update_env("T0", str(t_now * (10 ** 6)))
+                        update_env("T1", str(t_end * (10 ** 6)))
+
+                        for i in var:
+                            qty = i["qty"]
+                            unit = i["unit"]
+
+                            for dev in range(0, qty):
+                                time.sleep(0.5)
+                                req.create(unit, dev)
+
+                elif event.key == K_k:
+                    world.hud.send_iot_data = 0
+                    world.hud.can_thread.stop_thread()
+                    print("FINISHING SERIES...")
                 elif event.key == K_BACKQUOTE:
                     world.camera_manager.next_sensor()
                 elif event.key == K_n:
@@ -612,49 +665,28 @@ class KeyboardControl(object):
 class REQUEST(object):
     def __init__(self):
         print('Request [Started]')
+        self.CLIENT_CERTIFICATE = ['./certificate/client-42-A7B64D415BD3E9A6.pem',
+                                   './certificate/client-42-A7B64D415BD3E9A6.key']
 
+        self.session = requests.Session()
+        self.session.headers = {'Content-type' : 'application/json'}
+        self.session.cert = self.CLIENT_CERTIFICATE
 
-    def send(self, currentTime, value):
-        print('Request [SEND]')
-        CLIENT_CERTIFICATE = ['./certificate/client-42-A7B64D415BD3E9A6.pem',
-                               './certificate/client-42-A7B64D415BD3E9A6.key']
+    def send(self, currentTime, value, unit, dev):
+        #print('Request [SEND]')
+        time.sleep(0.5)
 
-        exists = self.get(CLIENT_CERTIFICATE)
+        self.put(unit, dev, currentTime, value)
 
-        if (exists == True):
-            inserted = self.put(CLIENT_CERTIFICATE, currentTime, value)
+    def get(self, unit, dev):
+        method = 'GET'
+        url = self.url(method)
 
-            if (inserted == True):
-                print("Log: Data inserted")
-            else:
-                print("Log: Problem inserting data")
-        else:
-            created = self.create(CLIENT_CERTIFICATE)
+        print(f'Request [{method}]')
 
-            if (created == True):
-                print("Log: Created series")
+        json_query = self.query(method, unit, dev, None, None)
 
-                inserted = self.put(CLIENT_CERTIFICATE, currentTime, value)
-
-                if (inserted == True):
-                    print("Log: Data inserted")
-                else:
-                    print("Log: Problem inserting data")
-            else:
-                print("Log: Problem creating series")
-
-
-    def get(self, CLIENT_CERTIFICATE):
-        print('Request [GET]')
-        url ='https://iot.lisha.ufsc.br/api/get.php'
-
-        session = requests.Session()
-        session.headers = {'Content-type' : 'application/json'}
-        session.cert = CLIENT_CERTIFICATE
-
-        json_query = self.query('GET', 0x84963924, 0, 0)
-
-        response = session.post(url, json.dumps(json_query))
+        response = self.session.post(url, json.dumps(json_query))
 
         valid = response.ok
         data = response.json()
@@ -665,76 +697,93 @@ class REQUEST(object):
             return False
 
 
-    def create(self, CLIENT_CERTIFICATE):
-        print('Request [CREATE]')
-        url ='https://iot.lisha.ufsc.br/api/create.php'
+    def create(self, unit, dev):
+        method = 'CREATE'
+        url = self.url(method)
 
-        session = requests.Session()
-        session.headers = {'Content-type' : 'application/json'}
-        session.cert = CLIENT_CERTIFICATE
+        print(f'Request [{method}]')
 
-        # print(CLIENT_CERTIFICATE)
+        json_query = self.query(method, unit, dev, None, None)
 
-        json_query = self.query('CREATE', 0x84963924, 0, 0)
+        print(json_query) #to get the t0 e t1
 
-        # print(json_query)
-
-        response = session.post(url, json.dumps(json_query))
-
-        # print(response)
+        response = self.session.post(url, json.dumps(json_query))
 
         valid = response.ok
         status_code = response.status_code
 
         if (valid and status_code == 400):
-            self.put(CLIENT_CERTIFICATE, int(time.time()) * (10 ** 6), 0)
             return True
         else:
             return False
 
 
-    def put(self, CLIENT_CERTIFICATE, currentTime, value):
-        print('Request [PUT]')
-        url ='https://iot.lisha.ufsc.br/api/put.php'
+    def put(self, unit, dev, currentTime, value):
+        method = 'PUT'
+        url = self.url(method)
 
-        session = requests.Session()
-        session.headers = {'Content-type' : 'application/json'}
-        session.cert = CLIENT_CERTIFICATE
+        time_start = int(time.time())
 
-        json_query = self.query('PUT', 0x84963924, currentTime, value)
 
-        response = session.post(url, json.dumps(json_query))
+        t1 = int(get_env('T1')) / (10 ** 6)
+
+        if t1 < time_start:
+            print("RESTART SERIES...")
+
+        print(f'Request [{method}]')
+
+        json_query = self.query(method, unit, dev, currentTime, value)
+
+        #print(json_query)
+
+        response = self.session.post(url, json.dumps(json_query))
 
         valid = response.ok
         status_code = response.status_code
 
-        # print("Return Code [", str(status_code), "]", sep="")
-        # print("Return: ", response)
-
+        time_end = int(time.time())
+        #print(response)
+        request_time = time_end - time_start
         if (valid and status_code == 204):
+            print(f"{method}-True | Time-{request_time}s")
             return True
         else:
+            print(f"{method}-False | Time-{request_time}s")
             return False
 
+    def url(self, method):
+        method = method.lower()
 
-    def query(self, method, unit, currentTime, value):
+        result =f"https://iot.lisha.ufsc.br/api/{method}.php"
+
+        return result
+
+    def query(self, method, unit, dev, currentTime, value):
         version = 1.1
         # unit = 0x84963924 # 2147473648
-        t0 = 1627127115000000  # Sunday, July 24, 2021 8:45:15 AM GMT-03:00
-        t1 = 1658663115000000  # Sunday, July 24, 2022 8:45:15 AM GMT-03:00
+
+        #t0 = 1627127115000000  # Sunday, July 24, 2021 8:45:15 AM GMT-03:00
+        #t1 = 1658663115000000  # Sunday, July 24, 2022 8:45:15 AM GMT-03:00
         r = 0
         x = 10
         y = 10
         z = 10
-        dev = 0
+        #dev = 0
         error = 0
         trust = 0
         wf = 0
-        domain =  os.getenv('DOMAIN')
-        username = os.getenv('USERNAME')
-        password = os.getenv('PASSWORD')
+        domain =  get_env('DOMAIN')
+        username = get_env('USERNAME')
+        password = get_env('PASSWORD')
+        t0 = int(get_env('T0'))
+        t1 = int(get_env('T1'))
 
-        if method == "GET":
+        # if (method == "CREATE"):
+            # t_base = int(time.time())
+            # t0 = t_base * (10 ** 6)
+            # t1 = (t_base + (60*5)) * (10 ** 6) # 5 minutos
+
+        if (method == "GET"):
             json = {
                 "series": {
                     "version": version,
@@ -750,7 +799,7 @@ class REQUEST(object):
                 },
                 "credentials": {"domain": domain},
             }
-        elif method == "CREATE":
+        elif (method == "CREATE"):
             json = {
                 "series": {
                     "version": version,
@@ -766,7 +815,7 @@ class REQUEST(object):
                 },
                 "credentials": {"domain": domain},
             }
-        elif method == "PUT":
+        elif (method == "PUT"):
             json = {
                 "smartdata": [
                     {
@@ -781,15 +830,13 @@ class REQUEST(object):
                         "y": y,
                         "z": z,
                         "dev": dev
-                    }
-                ],
-                "credentials": {
-                    "domain": domain,
-                    "username": username,
-                    "password": password,
-                },
+                    }]
+                # ],
+                # "credentials": {
+                #     "domain": domain,
+                # },
             }
-        elif method == "SEARCH":
+        elif (method == "SEARCH"):
             json = {
                 "series": {
                     "version": version,
@@ -812,11 +859,67 @@ class REQUEST(object):
 
         return json
 
+# ==============================================================================
+# -- UTILITY FUNCTIONS ----------------------------------------------------------------
+# ==============================================================================
+def get_env(key):
+    with open(".env", "r") as f:
+        for line in f.readlines():
+            try:
+                key_line, value_line = line.split('=')
+                if key == key_line:
+                    #print(value_line)
+                    value_line = value_line.replace("\n", "")
+                    value_line = value_line.replace('"', "")
+                    return value_line
+            except ValueError:
+                pass
+
+def update_env(key, new_value):
+    result = ""
+    with open(".env", "r") as f:
+        for line in f.readlines():
+            try:
+                #print(line)
+                key_line, value_line = line.split('=')
+                if key == key_line:
+                    result = result + key + '="' + new_value +'"' + "\n"
+                    #print(result)
+                else:
+                    result = result + line
+            except ValueError:
+                pass
+
+    with open(".env", "w") as f:
+        f.write(result)
+
+def get_var_request():
+    var = [{"id": 464,  "name": "speed",         "unit": 0xE4963924, "SI Unit": "m/s",          "qty": 1},
+           {"id": 465,  "name": "gyroscope",     "unit": 0xE4B23924, "SI Unit": "rad/s",        "qty": 3},
+           {"id": 466,  "name": "accelerometer", "unit": 0xE4962924, "SI Unit": "m/s2",         "qty": 3},
+           {"id": 467,  "name": "gnss-altitude", "unit": 0xE4964924, "SI Unit": "m",            "qty": 1},
+           {"id": 467,  "name": "gnss-latitude", "unit": 0xE4B24924, "SI Unit": "degress->RAD", "qty": 1},
+           {"id": 467,  "name": "gnss-longitude","unit": 0xE4B24924, "SI Unit": "degress->RAD", "qty": 1},
+           {"id": 468,  "name": "gear",          "unit": 0xF8000006, "SI Unit": "Counter",      "qty": 1},
+           {"id": 469,  "name": "colision",      "unit": 0xF8000006, "SI Unit": "Counter",      "qty": 1}]
+
+    return var
+
+def get_unit_request(id, name):
+    var = get_var_request()
+
+    for i in var:
+        if (id != 467):
+            if (i["id"]==id):
+                return i["unit"]
+        else:
+            if (i["name"]==name):
+                return i["unit"]
 
 # ==============================================================================
 # -- CAN THREAD ----------------------------------------------------------------
 # ==============================================================================
-def update(running):
+def update(running, send_iot_data):
     print('CAN Thread[Started]')
 
     db = cantools.database.load_file("./_honda_2017.dbc")
@@ -842,131 +945,175 @@ def update(running):
     vehicle_col = 0
     vehicle_col_ant = 0
 
-    while running:
-        message = can_bus.recv()
+    #IDS
+    speed_id = 464
+    gyroscope_id = 465
+    accelerometer_id = 466
+    gnss_id = 467
+    gear_id = 468
+    colision_id = 469
+    #print("run - ",running)
 
-        # SPEED
-        if (message.arbitration_id == 464):
-            speed = float(db.decode_message(message.arbitration_id, message.data)['WHEEL_SPEED'])
-            currentTime = int(time.time()) * (10 ** 6)
+    while True:
+        #print("run")
+        if (running  == True):
+            break
 
-            if (speed_ant != speed):
-                speed_ant = speed
-                print('Speed[currentTime]: ', currentTime)
-                print('Speed[value]: ', speed)
-                # req.send(currentTime, speed)
+        if (send_iot_data == 1):
 
-        # GYROSCOPE
-        if (message.arbitration_id == 465):
-            gyro_x = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_X'])
-            gyro_y = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Y'])
-            gyro_z = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Z'])
-            gyro_x_signal = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_X_SIG'])
-            gyro_y_signal = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Y_SIG'])
-            gyro_z_signal = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Z_SIG'])
+            message = can_bus.recv()
 
-            if gyro_x_signal > 0:
-                gyro_x = gyro_x * -1
+            # SPEED
+            if (message.arbitration_id == speed_id):
+                speed = float(db.decode_message(message.arbitration_id, message.data)['WHEEL_SPEED'])
+                currentTime = int(time.time()) * (10 ** 6)
 
-            if gyro_y_signal > 0:
-                gyro_y = gyro_y * -1
+                if (speed_ant != speed):
+                    speed_ant = speed
+                    unit = get_unit_request(speed_id, 'speed')
+                    # print('Speed[currentTime]: ', currentTime)
+                    # print('Speed[value]: ', speed)
+                    req.send(currentTime, speed, unit, 0)
 
-            if gyro_z_signal > 0:
-                gyro_z = gyro_z * -1
+            # GYROSCOPE
+            if (message.arbitration_id == gyroscope_id):
+                gyro_x = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_X'])
+                gyro_y = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Y'])
+                gyro_z = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Z'])
+                gyro_x_signal = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_X_SIG'])
+                gyro_y_signal = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Y_SIG'])
+                gyro_z_signal = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Z_SIG'])
 
-            gyro = str(gyro_x) + '|' + str(gyro_y) + '|' + str(gyro_z)
-            currentTime = int(time.time()) * (10 ** 6)
+                if gyro_x_signal > 0:
+                    gyro_x = gyro_x * -1
 
-            if (gyro != gyro_ant):
-                gyro_ant = gyro
-                print('GYROSCOPE[currentTime]: ', currentTime)
-                print('GYROSCOPE[value]: ', gyro)
-                # req.send(currentTime, gyro_x)
-                # req.send(currentTime, gyro_y)
-                # req.send(currentTime, gyro_z)
+                if gyro_y_signal > 0:
+                    gyro_y = gyro_y * -1
 
-        # ACCELERO
-        if (message.arbitration_id == 466):
-            accel_x = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_X'])
-            accel_y = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Y'])
-            accel_z = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Z'])
-            accel_x_signal = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_X_SIG'])
-            accel_y_signal = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Y_SIG'])
-            accel_z_signal = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Z_SIG'])
+                if gyro_z_signal > 0:
+                    gyro_z = gyro_z * -1
 
-            if accel_x_signal > 0:
-                accel_x = accel_x * -1
+                gyro = str(gyro_x) + '|' + str(gyro_y) + '|' + str(gyro_z)
+                currentTime = int(time.time()) * (10 ** 6)
 
-            if accel_y_signal > 0:
-                accel_y = accel_y * -1
+                if (gyro != gyro_ant):
+                    gyro_ant = gyro
+                    # print('GYROSCOPE[currentTime]: ', currentTime)
+                    # print('GYROSCOPE[value]: ', gyro)
 
-            if accel_z_signal > 0:
-                accel_z = accel_z * -1
+                    unit = get_unit_request(gyroscope_id, 'gyroscope')
 
-            accel = str(accel_x) + '|' + str(accel_y) + '|' + str(accel_z)
-            currentTime = int(time.time()) * (10 ** 6)
+                    req.send(currentTime, gyro_x, unit, 0)
+                    req.send(currentTime, gyro_y, unit, 1)
+                    req.send(currentTime, gyro_z, unit, 2)
 
-            if (accel != accel_ant):
-                accel_ant = accel
-                print('ACCELERO[currentTime]: ', currentTime)
-                print('ACCELERO[value]: ', accel)
-                # req.send(currentTime, accel_x)
-                # req.send(currentTime, accel_y)
-                # req.send(currentTime, accel_z)]
+            # ACCELERO
+            if (message.arbitration_id == accelerometer_id):
+                accel_x = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_X'])
+                accel_y = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Y'])
+                accel_z = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Z'])
+                accel_x_signal = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_X_SIG'])
+                accel_y_signal = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Y_SIG'])
+                accel_z_signal = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Z_SIG'])
 
-        # GNSS
-        if (message.arbitration_id == 467):
-            gnss_alt = float(db.decode_message(message.arbitration_id, message.data)['GNSS_ALTITUDE'])
-            gnss_lat = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LATITUDE'])
-            gnss_lon = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LONGITUDE'])
-            gnss_lat_signal = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LATITUDE_SIG'])
-            gnss_lon_signal = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LONGITUDE_SIG'])
+                if accel_x_signal > 0:
+                    accel_x = accel_x * -1
+
+                if accel_y_signal > 0:
+                    accel_y = accel_y * -1
+
+                if accel_z_signal > 0:
+                    accel_z = accel_z * -1
+
+                accel = str(accel_x) + '|' + str(accel_y) + '|' + str(accel_z)
+                currentTime = int(time.time()) * (10 ** 6)
+
+                if (accel != accel_ant):
+                    accel_ant = accel
+                    # print('ACCELERO[currentTime]: ', currentTime)
+                    # print('ACCELERO[value]: ', accel)
+
+                    unit = get_unit_request(accelerometer_id, 'accelerometer')
+
+                    req.send(currentTime, accel_x, unit, 0)
+                    req.send(currentTime, accel_y, unit, 1)
+                    req.send(currentTime, accel_z, unit, 2)
+
+            # GNSS
+            if (message.arbitration_id == gnss_id):
+                gnss_alt = float(db.decode_message(message.arbitration_id, message.data)['GNSS_ALTITUDE'])
+                gnss_lat = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LATITUDE']) / 1000
+                gnss_lon = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LONGITUDE']) / 1000
+                gnss_lat_signal = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LATITUDE_SIG'])
+                gnss_lon_signal = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LONGITUDE_SIG'])
 
 
-            if gnss_lat_signal > 0:
-                gnss_lat = gnss_lat * -1
+                if gnss_lat_signal > 0:
+                    gnss_lat = gnss_lat * -1
 
-            if gnss_lon_signal > 0:
-                gnss_lon = gnss_lon * -1
+                if gnss_lon_signal > 0:
+                    gnss_lon = gnss_lon * -1
 
-            gnss = str(gnss_alt) + '|' + str(gnss_lat) + '|' + str(gnss_lon)
-            currentTime = int(time.time()) * (10 ** 6)
+                rad = 0.0174533
 
-            if (gnss != gnss_ant):
-                gnss_ant = gnss
-                print('GNSS[currentTime]: ', currentTime)
-                print('GNSS[value]: ', gnss)
-                # req.send(currentTime, gnss_lat)
-                # req.send(currentTime, gnss_lon)
-                # req.send(currentTime, gnss_alt)]
+                #Convert o Radians (rad)
+                gnss_lat = gnss_lat * rad
+                gnss_lon = gnss_lon * rad
 
-        # GEAR
-        if (message.arbitration_id == 468):
-            gear = float(db.decode_message(message.arbitration_id, message.data)['GEAR']) - 1
-            currentTime = int(time.time()) * (10 ** 6)
+                gnss = str(gnss_alt) + '|' + str(gnss_lat) + '|' + str(gnss_lon)
+                currentTime = int(time.time()) * (10 ** 6)
 
-            if (gear_ant != gear):
-                gear_ant = gear
-                print('GEAR[currentTime]: ', currentTime)
-                print('GEAR[value]: ', gear)
-                # req.send(currentTime, gear)
+                if (gnss != gnss_ant):
+                    gnss_ant = gnss
+                    # print('GNSS[currentTime]: ', currentTime)
+                    # print('GNSS[value]: ', gnss)
 
-        # VEHICLE COLISION
-        if (message.arbitration_id == 469):
-            vehicle_col = float(db.decode_message(message.arbitration_id, message.data)['COLISION'])
-            currentTime = int(time.time()) * (10 ** 6)
+                    unit_alt = get_unit_request(gnss_id, 'gnss-altitude')
+                    unit_lat = get_unit_request(gnss_id, 'gnss-latitude')
+                    unit_lon = get_unit_request(gnss_id, 'gnss-longitude')
 
-            if (vehicle_col_ant != vehicle_col):
-                vehicle_col_ant = vehicle_col
-                print('VEHICLE_COL[currentTime]: ', currentTime)
-                print('VEHICLE_COL[value]: ', vehicle_col)
-                # req.send(currentTime, vehicle_col)
+                    req.send(currentTime, gnss_lat, unit_lat, 0)
+                    req.send(currentTime, gnss_lon, unit_lon, 0)
+                    req.send(currentTime, gnss_alt, unit_alt, 0)
+
+            # GEAR
+            if (message.arbitration_id == gear_id):
+                gear = float(db.decode_message(message.arbitration_id, message.data)['GEAR']) - 1
+                currentTime = int(time.time()) * (10 ** 6)
+
+                if (gear_ant != gear):
+                    gear_ant = gear
+                    # print('GEAR[currentTime]: ', currentTime)
+                    # print('GEAR[value]: ', gear)
+
+                    unit = get_unit_request(gear_id, 'gear')
+
+                    req.send(currentTime, gear, unit, 0)
+
+            # VEHICLE COLISION
+            if (message.arbitration_id == colision_id):
+                vehicle_col = float(db.decode_message(message.arbitration_id, message.data)['COLISION'])
+                currentTime = int(time.time()) * (10 ** 6)
+
+                if (vehicle_col_ant != vehicle_col):
+                    vehicle_col_ant = vehicle_col
+                    # print('VEHICLE_COL[currentTime]: ', currentTime)
+                    # print('VEHICLE_COL[value]: ', vehicle_col)
+
+                    unit = get_unit_request(colision_id, 'colision')
+
+                    req.send(currentTime, vehicle_col, unit, 1)
+
 
 class CAN_THREAD(object):
-    def __init__(self):
-        thread = threading.Thread(name='update', target=update, args=(True,))
-        thread.start()
+    def __init__(self, send_iot_data):
+        self.running = False
+        self.thread = threading.Thread(name='update', target=update, args=(lambda: self.running, send_iot_data))
+        self.thread.start()
 
+    def stop_thread(self):
+        self.running = True
+        self.thread.join()
 # ==============================================================================
 # -- CAN (INSERT) --------------------------------------------------------------
 # ==============================================================================
@@ -998,21 +1145,23 @@ class CAN(object):
         self.can_bus.send(message)
 
     def send_gyro(self, gyro_x, gyro_x_sig, gyro_y, gyro_y_sig, gyro_z, gyro_z_sig):
-        data = self.gyroscope_message.encode({'GYROSCOPE_X': gyro_x, 'GYROSCOPE_Y': gyro_y, 'GYROSCOPE_Z': gyro_z, 'GYROSCOPE_X_SIG': gyro_x_sig, 'GYROSCOPE_Y_SIG': gyro_y_sig, 'GYROSCOPE_Z_SIG': gyro_z_sig})
+        data = self.gyroscope_message.encode({'GYROSCOPE_X': float(gyro_x), 'GYROSCOPE_Y': float(gyro_y), 'GYROSCOPE_Z': float(gyro_z), 'GYROSCOPE_X_SIG': gyro_x_sig, 'GYROSCOPE_Y_SIG': gyro_y_sig, 'GYROSCOPE_Z_SIG': gyro_z_sig})
         message = can.Message(arbitration_id=self.gyroscope_message.frame_id, data=data)
         self.can_bus.send(message)
 
     def send_accel(self, accel_x, accel_x_sig, accel_y, accel_y_sig, accel_z, accel_z_sig):
         # print("send_accel: "+str(accel_x_sig)+ '_'+str(accel_x)+"|"+str(accel_y_sig)+ '_'+str(accel_y)+"|"+str(accel_z_sig)+"_"+str(accel_z))
 
-        data = self.accelerometer_message.encode({'ACCELERO_X': accel_x, 'ACCELERO_Y': accel_y, 'ACCELERO_Z': accel_z, 'ACCELERO_X_SIG': accel_x_sig, 'ACCELERO_Y_SIG': accel_y_sig, 'ACCELERO_Z_SIG': accel_z_sig})
+        data = self.accelerometer_message.encode({'ACCELERO_X': float(accel_x), 'ACCELERO_Y': float(accel_y), 'ACCELERO_Z': float(accel_z), 'ACCELERO_X_SIG': accel_x_sig, 'ACCELERO_Y_SIG': accel_y_sig, 'ACCELERO_Z_SIG': accel_z_sig})
         message = can.Message(arbitration_id=self.accelerometer_message.frame_id, data=data)
         self.can_bus.send(message)
 
     def send_gnss(self, gnss_altitude, gnss_latitude, gnss_latitude_sig, gnss_longitude, gnss_longitude_sig):
-        # print("GNSS_SEND: "+str(gnss_altitude)+"|"+str(gnss_latitude_sig)+ '_'+str(gnss_latitude)+"|"+str(gnss_longitude_sig)+"_"+str(gnss_longitude))
+        #print("GNSS_SEND: "+str(gnss_altitude)+"|"+str(gnss_latitude_sig)+ '_'+str(gnss_latitude)+"|"+str(gnss_longitude_sig)+"_"+str(gnss_longitude))
 
-        data = self.gnss_message.encode({'GNSS_ALTITUDE': gnss_altitude, 'GNSS_LATITUDE': gnss_latitude, 'GNSS_LONGITUDE': gnss_longitude, 'GNSS_LATITUDE_SIG': gnss_latitude_sig, 'GNSS_LONGITUDE_SIG': gnss_longitude_sig})
+
+        data = self.gnss_message.encode({'GNSS_ALTITUDE': float(gnss_altitude), 'GNSS_LATITUDE': float(gnss_latitude), 'GNSS_LONGITUDE': float(gnss_longitude), 'GNSS_LATITUDE_SIG': gnss_latitude_sig, 'GNSS_LONGITUDE_SIG': gnss_longitude_sig})
+
         message = can.Message(arbitration_id=self.gnss_message.frame_id, data=data)
         self.can_bus.send(message)
 
@@ -1038,14 +1187,14 @@ class HUD(object):
         self._font_mono = pygame.font.Font(mono, 12 if os.name == "nt" else 14)
         self._notifications = FadingText(font, (width, 40), (0, height - 40))
         self.help = HelpText(pygame.font.Font(mono, 16), width, height)
-        self.can = CAN()
-        self.can_thread = CAN_THREAD()
         self.server_fps = 0
         self.frame = 0
         self.simulation_time = 0
         self._show_info = True
         self._info_text = []
         self._server_clock = pygame.time.Clock()
+        self.create_can = True
+        self.send_iot_data = 0
 
     def on_world_tick(self, timestamp):
         self._server_clock.tick()
@@ -1071,98 +1220,105 @@ class HUD(object):
         collision = [x / max_col for x in collision]
         vehicles = world.world.get_actors().filter("vehicle.*")
 
-        # CAN Bus
-        speed = 3.6 * math.sqrt(v.x ** 2 + v.y ** 2 + v.z ** 2)
-        speed = round(speed, 2)
-        self.can.send_speed(speed)
-        self.can.send_gear(c.gear + 1)
+        if (self.create_can == True and self.send_iot_data == 1):
+            #print("created")
+            self.can = CAN()
+            self.can_thread = CAN_THREAD(self.send_iot_data)
+            self.create_can = False
 
-        # print("Gyro: ",world.imu_sensor.gyroscope)
+        if (self.send_iot_data == 1):
+            # CAN Bus
+        	speed = 3.6 * math.sqrt(v.x ** 2 + v.y ** 2 + v.z ** 2)
+        	speed = round(speed, 2)
+        	self.can.send_speed(speed)
+        	self.can.send_gear(c.gear + 1)
 
-        gyro_x = round(world.imu_sensor.gyroscope[0], 2)
-        gyro_y = round(world.imu_sensor.gyroscope[1], 2)
-        gyro_z = round(world.imu_sensor.gyroscope[2], 2)
+        	# print("Gyro: ",world.imu_sensor.gyroscope)
 
-        if (gyro_x >= 0):
-           gyro_x_sig = 0
-        else:
-           gyro_x_sig = 1
+        	gyro_x = round(world.imu_sensor.gyroscope[0], 2)
+        	gyro_y = round(world.imu_sensor.gyroscope[1], 2)
+        	gyro_z = round(world.imu_sensor.gyroscope[2], 2)
 
-        if (gyro_y >= 0):
-           gyro_y_sig = 0
-        else:
-           gyro_y_sig = 1
+        	if (gyro_x >= 0):
+        	   gyro_x_sig = 0
+        	else:
+        	   gyro_x_sig = 1
 
-        if (gyro_z >= 0):
-           gyro_z_sig = 0
-        else:
-           gyro_z_sig = 1
+        	if (gyro_y >= 0):
+        	   gyro_y_sig = 0
+        	else:
+        	   gyro_y_sig = 1
 
-        self.can.send_gyro(abs(gyro_x), gyro_x_sig, abs(gyro_y), gyro_y_sig, abs(gyro_z), gyro_z_sig)
+        	if (gyro_z >= 0):
+        	   gyro_z_sig = 0
+        	else:
+        	   gyro_z_sig = 1
 
-        accel_x = round(world.imu_sensor.accelerometer[0], 2)
-        accel_y = round(world.imu_sensor.accelerometer[1], 2)
-        accel_z = round(world.imu_sensor.accelerometer[2], 2)
+        	self.can.send_gyro(abs(gyro_x), gyro_x_sig, abs(gyro_y), gyro_y_sig, abs(gyro_z), gyro_z_sig)
 
-        # Setting 0 if it's NULL
-        if (accel_x == None or accel_x > 9999):
-            accel_x = 0
+        	accel_x = float(round(world.imu_sensor.accelerometer[0], 2))
+        	accel_y = float(round(world.imu_sensor.accelerometer[1], 2))
+        	accel_z = float(round(world.imu_sensor.accelerometer[2], 2))
 
-        if (accel_y == None or accel_y > 9999):
-            accel_y = 0
+        	# Setting 0 if it's NULL
+        	if (accel_x == None or accel_x > 9999):
+        	    accel_x = 0
 
-        if (accel_z == None or accel_z > 9999):
-            accel_z = 0
+        	if (accel_y == None or accel_y > 9999):
+        	    accel_y = 0
 
-        # Getting Signal for each field
-        if (accel_x >= 0):
-           accel_x_sig = 0
-        else:
-           accel_x_sig = 1
+        	if (accel_z == None or accel_z > 9999):
+        	    accel_z = 0
 
-        if (accel_y >= 0):
-           accel_y_sig = 0
-        else:
-           accel_y_sig = 1
+        	# Getting Signal for each field
+        	if (accel_x >= 0):
+        	   accel_x_sig = 0
+        	else:
+        	   accel_x_sig = 1
 
-        if (accel_z >= 0):
-           accel_z_sig = 0
-        else:
-           accel_z_sig = 1
+        	if (accel_y >= 0):
+        	   accel_y_sig = 0
+        	else:
+        	   accel_y_sig = 1
 
-        self.can.send_accel(abs(accel_x), accel_x_sig, abs(accel_y), accel_y_sig, abs(accel_z), accel_z_sig)
+        	if (accel_z >= 0):
+        	   accel_z_sig = 0
+        	else:
+        	   accel_z_sig = 1
 
-        gnss_alt = round(t.location.z, 6)
-        gnss_lat = round(world.gnss_sensor.lat, 6)
-        gnss_lon = round(world.gnss_sensor.lon, 6)
+        	self.can.send_accel(abs(accel_x), accel_x_sig, abs(accel_y), accel_y_sig, abs(accel_z), accel_z_sig)
 
-        gnss_lat_sig = 0
-        gnss_lon_sig = 0
+        	gnss_alt = float(round(t.location.z, 6))
+        	gnss_lat = float(round(world.gnss_sensor.lat, 6) * 1000)
+        	gnss_lon = float(round(world.gnss_sensor.lon, 6) * 1000)
 
-        if (gnss_alt < 0):
-            gnss_alt = 0
-        elif (gnss_alt > 9999):
-            gnss_alt = 9999
+        	gnss_lat_sig = 0
+        	gnss_lon_sig = 0
 
-        if (gnss_lat > 9999):
-            gnss_lat = 9999
+        	if (gnss_alt < 0):
+        	    gnss_alt = 0
+        	elif (gnss_alt > 9999):
+        	    gnss_alt = 9999
 
-        if (gnss_lon > 9999):
-            gnss_lon = 9999
+        	if (gnss_lat > 9999):
+        	    gnss_lat = 9999
 
-        if (gnss_lat >= 0):
-            gnss_lat_sig = 0
-        else:
-            gnss_lat_sig = 1
+        	if (gnss_lon > 9999):
+        	    gnss_lon = 9999
 
-        if (gnss_lon >= 0):
-            gnss_lon_sig = 0
-        else:
-            gnss_lon_sig = 1
+        	if (gnss_lat >= 0):
+        	    gnss_lat_sig = 0
+        	else:
+        	    gnss_lat_sig = 1
 
-        # print("GNSS: "+str(gnss_alt)+"|"+str(gnss_lat_sig)+ '_'+str(gnss_lat)+"|"+str(gnss_lon_sig)+"_"+str(gnss_lon))
+        	if (gnss_lon >= 0):
+        	    gnss_lon_sig = 0
+        	else:
+        	    gnss_lon_sig = 1
 
-        self.can.send_gnss(gnss_alt, abs(gnss_lat), gnss_lat_sig, abs(gnss_lon), gnss_lon_sig)
+        	#print("GNSS: "+str(gnss_alt)+"|"+str(gnss_lat_sig)+ '_'+str(gnss_lat)+"|"+str(gnss_lon_sig)+"_"+str(gnss_lon))
+
+        	self.can.send_gnss(gnss_alt, abs(gnss_lat), gnss_lat_sig, abs(gnss_lon), gnss_lon_sig)
 
         self._info_text = [
             "Server:  % 16.0f FPS" % self.server_fps,
@@ -1357,7 +1513,6 @@ class CollisionSensor(object):
         # We need to pass the lambda a weak reference to self to avoid circular
         # reference.
         weak_self = weakref.ref(self)
-        self.can = CAN()
         self.sensor.listen(
             lambda event: CollisionSensor._on_collision(weak_self, event)
         )
@@ -1378,7 +1533,7 @@ class CollisionSensor(object):
         impulse = event.normal_impulse
         intensity = math.sqrt(impulse.x ** 2 + impulse.y ** 2 + impulse.z ** 2)
 
-        self.can.send_colision(intensity)
+        self.hud.can.send_colision(intensity)
 
         self.history.append((event.frame, intensity))
         if len(self.history) > 4000:
@@ -1746,7 +1901,6 @@ class CameraManager(object):
 # -- game_loop() ---------------------------------------------------------------
 # ==============================================================================
 
-
 def game_loop(args):
     pygame.init()
     pygame.font.init()
@@ -1754,7 +1908,7 @@ def game_loop(args):
 
     try:
         client = carla.Client(args.host, args.port)
-        client.set_timeout(5.0)
+        client.set_timeout(10.0)
 
         display = pygame.display.set_mode(
             (args.width, args.height), pygame.HWSURFACE | pygame.DOUBLEBUF
