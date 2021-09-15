@@ -82,7 +82,8 @@ except IndexError:
 # -- imports -------------------------------------------------------------------
 # ==============================================================================
 
-#send_iot_data = 0 # 0: dont send | 1: send data IoT
+UDP_IP = "127.0.0.1"
+UDP_PORT = 5005
 
 import carla
 
@@ -103,6 +104,7 @@ import requests
 import json
 import threading
 import time
+import socket
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -313,12 +315,12 @@ class World(object):
             self.hud.notification("Loading map layer: %s" % selected)
             self.world.load_map_layer(selected)
 
-    def toggle_radar(self):
-        if self.radar_sensor is None:
-            self.radar_sensor = RadarSensor(self.player)
-        elif self.radar_sensor.sensor is not None:
-            self.radar_sensor.sensor.destroy()
-            self.radar_sensor = None
+    # def toggle_radar(self):
+    #     if self.radar_sensor is None:
+    #         self.radar_sensor = RadarSensor(self.player)
+    #     elif self.radar_sensor.sensor is not None:
+    #         self.radar_sensor.sensor.destroy()
+    #         self.radar_sensor = None
 
     def modify_vehicle_physics(self, vehicle):
         physics_control = vehicle.get_physics_control()
@@ -674,9 +676,15 @@ class REQUEST(object):
 
     def send(self, currentTime, value, unit, dev):
         #print('Request [SEND]')
-        time.sleep(0.5)
+        time.sleep(0.1)
 
-        self.put(unit, dev, currentTime, value)
+        valid = self.put(unit, dev, currentTime, value)
+
+        while not valid:
+            time.sleep(0.1)
+            print("problem sending...")
+            valid = self.put(unit, dev, currentTime, value)
+
 
     def get(self, unit, dev):
         method = 'GET'
@@ -723,14 +731,12 @@ class REQUEST(object):
         url = self.url(method)
 
         time_start = int(time.time())
-
-
         t1 = int(get_env('T1')) / (10 ** 6)
 
-        if t1 < time_start:
+        if (t1 < time_start):
             print("RESTART SERIES...")
 
-        print(f'Request [{method}]')
+        #print(f'Request [{method}]')
 
         json_query = self.query(method, unit, dev, currentTime, value)
 
@@ -742,13 +748,13 @@ class REQUEST(object):
         status_code = response.status_code
 
         time_end = int(time.time())
-        #print(response)
         request_time = time_end - time_start
+
         if (valid and status_code == 204):
-            print(f"{method}-True | Time-{request_time}s")
+            #print(f"{method}-True | Time-{request_time}s")
             return True
         else:
-            print(f"{method}-False | Time-{request_time}s")
+            #print(f"{method}-False | Time-{request_time}s")
             return False
 
     def url(self, method):
@@ -760,15 +766,10 @@ class REQUEST(object):
 
     def query(self, method, unit, dev, currentTime, value):
         version = 1.1
-        # unit = 0x84963924 # 2147473648
-
-        #t0 = 1627127115000000  # Sunday, July 24, 2021 8:45:15 AM GMT-03:00
-        #t1 = 1658663115000000  # Sunday, July 24, 2022 8:45:15 AM GMT-03:00
         r = 0
         x = 10
         y = 10
         z = 10
-        #dev = 0
         error = 0
         trust = 0
         wf = 0
@@ -777,11 +778,6 @@ class REQUEST(object):
         password = get_env('PASSWORD')
         t0 = int(get_env('T0'))
         t1 = int(get_env('T1'))
-
-        # if (method == "CREATE"):
-            # t_base = int(time.time())
-            # t0 = t_base * (10 ** 6)
-            # t1 = (t_base + (60*5)) * (10 ** 6) # 5 minutos
 
         if (method == "GET"):
             json = {
@@ -831,10 +827,6 @@ class REQUEST(object):
                         "z": z,
                         "dev": dev
                     }]
-                # ],
-                # "credentials": {
-                #     "domain": domain,
-                # },
             }
         elif (method == "SEARCH"):
             json = {
@@ -868,7 +860,6 @@ def get_env(key):
             try:
                 key_line, value_line = line.split('=')
                 if key == key_line:
-                    #print(value_line)
                     value_line = value_line.replace("\n", "")
                     value_line = value_line.replace('"', "")
                     return value_line
@@ -880,11 +871,9 @@ def update_env(key, new_value):
     with open(".env", "r") as f:
         for line in f.readlines():
             try:
-                #print(line)
                 key_line, value_line = line.split('=')
                 if key == key_line:
                     result = result + key + '="' + new_value +'"' + "\n"
-                    #print(result)
                 else:
                     result = result + line
             except ValueError:
@@ -919,13 +908,11 @@ def get_unit_request(id, name):
 # ==============================================================================
 # -- CAN THREAD ----------------------------------------------------------------
 # ==============================================================================
-def update(running, send_iot_data):
+def update(running, hud):
     print('CAN Thread[Started]')
 
     db = cantools.database.load_file("./_honda_2017.dbc")
     can_bus = can.interface.Bus("vcan0", bustype="socketcan")
-
-    req = REQUEST()
 
     speed = 0
     speed_ant = 0
@@ -952,15 +939,14 @@ def update(running, send_iot_data):
     gnss_id = 467
     gear_id = 468
     colision_id = 469
-    #print("run - ",running)
 
     while True:
-        #print("run")
+        time.sleep(1)
+
         if (running  == True):
             break
 
-        if (send_iot_data == 1):
-
+        if (hud.send_iot_data == 1):
             message = can_bus.recv()
 
             # SPEED
@@ -968,12 +954,11 @@ def update(running, send_iot_data):
                 speed = float(db.decode_message(message.arbitration_id, message.data)['WHEEL_SPEED'])
                 currentTime = int(time.time()) * (10 ** 6)
 
-                if (speed_ant != speed):
-                    speed_ant = speed
-                    unit = get_unit_request(speed_id, 'speed')
-                    # print('Speed[currentTime]: ', currentTime)
-                    # print('Speed[value]: ', speed)
-                    req.send(currentTime, speed, unit, 0)
+                #if (speed_ant != speed):
+                #    speed_ant = speed
+                unit = get_unit_request(speed_id, 'speed')
+
+                hud.queue_item("speed", currentTime, speed, unit, 0)
 
             # GYROSCOPE
             if (message.arbitration_id == gyroscope_id):
@@ -996,16 +981,13 @@ def update(running, send_iot_data):
                 gyro = str(gyro_x) + '|' + str(gyro_y) + '|' + str(gyro_z)
                 currentTime = int(time.time()) * (10 ** 6)
 
-                if (gyro != gyro_ant):
-                    gyro_ant = gyro
-                    # print('GYROSCOPE[currentTime]: ', currentTime)
-                    # print('GYROSCOPE[value]: ', gyro)
+                #if (gyro != gyro_ant):
+                #    gyro_ant = gyro
+                unit = get_unit_request(gyroscope_id, 'gyroscope')
 
-                    unit = get_unit_request(gyroscope_id, 'gyroscope')
-
-                    req.send(currentTime, gyro_x, unit, 0)
-                    req.send(currentTime, gyro_y, unit, 1)
-                    req.send(currentTime, gyro_z, unit, 2)
+                hud.queue_item("gyro_x", currentTime, speed, unit, 1)
+                hud.queue_item("gyro_y", currentTime, speed, unit, 2)
+                hud.queue_item("gyro_z", currentTime, speed, unit, 3)
 
             # ACCELERO
             if (message.arbitration_id == accelerometer_id):
@@ -1028,16 +1010,14 @@ def update(running, send_iot_data):
                 accel = str(accel_x) + '|' + str(accel_y) + '|' + str(accel_z)
                 currentTime = int(time.time()) * (10 ** 6)
 
-                if (accel != accel_ant):
-                    accel_ant = accel
-                    # print('ACCELERO[currentTime]: ', currentTime)
-                    # print('ACCELERO[value]: ', accel)
+                #if (accel != accel_ant):
+                #    accel_ant = accel
 
-                    unit = get_unit_request(accelerometer_id, 'accelerometer')
+                unit = get_unit_request(accelerometer_id, 'accelerometer')
 
-                    req.send(currentTime, accel_x, unit, 0)
-                    req.send(currentTime, accel_y, unit, 1)
-                    req.send(currentTime, accel_z, unit, 2)
+                hud.queue_item("accel_x", currentTime, accel_x, unit, 0)
+                hud.queue_item("accel_y", currentTime, accel_y, unit, 1)
+                hud.queue_item("accel_z", currentTime, accel_z, unit, 2)
 
             # GNSS
             if (message.arbitration_id == gnss_id):
@@ -1063,57 +1043,130 @@ def update(running, send_iot_data):
                 gnss = str(gnss_alt) + '|' + str(gnss_lat) + '|' + str(gnss_lon)
                 currentTime = int(time.time()) * (10 ** 6)
 
-                if (gnss != gnss_ant):
-                    gnss_ant = gnss
-                    # print('GNSS[currentTime]: ', currentTime)
-                    # print('GNSS[value]: ', gnss)
+                #if (gnss != gnss_ant):
+                #    gnss_ant = gnss
 
-                    unit_alt = get_unit_request(gnss_id, 'gnss-altitude')
-                    unit_lat = get_unit_request(gnss_id, 'gnss-latitude')
-                    unit_lon = get_unit_request(gnss_id, 'gnss-longitude')
+                unit_alt = get_unit_request(gnss_id, 'gnss-altitude')
+                unit_lat = get_unit_request(gnss_id, 'gnss-latitude')
+                unit_lon = get_unit_request(gnss_id, 'gnss-longitude')
 
-                    req.send(currentTime, gnss_lat, unit_lat, 0)
-                    req.send(currentTime, gnss_lon, unit_lon, 0)
-                    req.send(currentTime, gnss_alt, unit_alt, 0)
+                hud.queue_item("gnss-altitude",  currentTime, gnss_alt, unit_alt, 0)
+                hud.queue_item("gnss-latitude",  currentTime, gnss_lat, unit_lat, 0)
+                hud.queue_item("gnss-longitude", currentTime, gnss_lon, unit_lon, 0)
 
             # GEAR
             if (message.arbitration_id == gear_id):
                 gear = float(db.decode_message(message.arbitration_id, message.data)['GEAR']) - 1
                 currentTime = int(time.time()) * (10 ** 6)
 
-                if (gear_ant != gear):
-                    gear_ant = gear
-                    # print('GEAR[currentTime]: ', currentTime)
-                    # print('GEAR[value]: ', gear)
+                # if (gear_ant != gear):
+                #     gear_ant = gear
 
-                    unit = get_unit_request(gear_id, 'gear')
+                unit = get_unit_request(gear_id, 'gear')
 
-                    req.send(currentTime, gear, unit, 0)
+                hud.queue_item("gear", currentTime, gear, unit, 0)
 
             # VEHICLE COLISION
             if (message.arbitration_id == colision_id):
                 vehicle_col = float(db.decode_message(message.arbitration_id, message.data)['COLISION'])
                 currentTime = int(time.time()) * (10 ** 6)
 
-                if (vehicle_col_ant != vehicle_col):
-                    vehicle_col_ant = vehicle_col
-                    # print('VEHICLE_COL[currentTime]: ', currentTime)
-                    # print('VEHICLE_COL[value]: ', vehicle_col)
+                # if (vehicle_col_ant != vehicle_col):
+                #     vehicle_col_ant = vehicle_col
 
-                    unit = get_unit_request(colision_id, 'colision')
+                unit = get_unit_request(colision_id, 'colision')
 
-                    req.send(currentTime, vehicle_col, unit, 1)
+                hud.queue_item("colision", currentTime, vehicle_col, unit, 1)
 
 
 class CAN_THREAD(object):
-    def __init__(self, send_iot_data):
+    def __init__(self, hud):
         self.running = False
-        self.thread = threading.Thread(name='update', target=update, args=(lambda: self.running, send_iot_data))
+        self.thread = threading.Thread(name='update', target=update, args=(lambda: self.running, hud))
         self.thread.start()
 
     def stop_thread(self):
         self.running = True
         self.thread.join()
+
+# ==============================================================================
+# -- UDP --------------------------------------------------------------
+# ==============================================================================
+
+def udp_sending(running, hud):
+    print(f"UDP SENDING... {UDP_IP}")
+    sock = socket.socket(socket.AF_INET,    # Internet
+                         socket.SOCK_DGRAM) # UDP
+
+    while True:
+        if (running == True):
+            break
+
+        if len(hud.queue) > 0:
+            json = hud.queue.pop(0)
+
+            if len(json) > 0:
+                sock.sendto(str.encode(json), (UDP_IP, UDP_PORT))
+
+def udp_receiving(running, hud):
+    print(f"UDP RECEIVING... {UDP_IP}")
+    sock = socket.socket(socket.AF_INET, # Internet
+                         socket.SOCK_DGRAM) # UDP
+    sock.bind((UDP_IP, UDP_PORT))
+
+    while True:
+        if (running == True):
+            break
+
+        data_bin, addr = sock.recvfrom(1024) # buffer size is 1024 bytes
+
+        if len(data_bin) > 0:
+            hud.queue_request.append(data_bin)
+
+def udp_receiving_req(running, hud):
+    req = REQUEST()
+
+    while True:
+        if (running == True):
+            break
+
+        if len(hud.queue_request) > 0:
+            data_bin = hud.queue_request.pop(0)
+            data_str = data_bin.decode('utf8').replace("'", '"')
+
+            data = json.loads(data_str)
+
+            time = data["t"]
+            value = data["value"]
+            unit = data["unit"]
+            dev = data["dev"]
+
+            req.send(time, value, unit, dev)
+
+class UDP_SEND(object):
+    def __init__(self, hud):
+        self.running = False
+        self.thread = threading.Thread(name='udp_sending', target=udp_sending, args=(lambda: self.running, hud))
+        self.thread.start()
+
+    def stop_thread(self):
+        self.running = True
+        self.thread.join()
+
+class UDP_RECEIVE(object):
+    def __init__(self, hud):
+        self.running = False
+        self.thread = threading.Thread(name='udp_receiving', target=udp_receiving, args=(lambda: self.running, hud))
+        self.thread.start()
+
+        self.thread_request = threading.Thread(name='udp_receiving_req', target=udp_receiving_req, args=(lambda: self.running, hud))
+        self.thread_request.start()
+
+    def stop_thread(self):
+        self.running = True
+        self.thread.join()
+        self.thread_request.join()
+
 # ==============================================================================
 # -- CAN (INSERT) --------------------------------------------------------------
 # ==============================================================================
@@ -1195,6 +1248,16 @@ class HUD(object):
         self._server_clock = pygame.time.Clock()
         self.create_can = True
         self.send_iot_data = 0
+        self.queue = []
+        self.queue_request = []
+
+    def queue_item(self, name, t, value, unit, dev):
+        # json = monta_json
+        json = '{"name": "'+name+'", "t": '+str(t)+', "value": '+str(value)+', "unit": '+str(unit)+', "dev": '+str(dev)+'}'
+        self.queue.append(json)
+        length_queue = len(self.queue)
+
+        self.notification(f"Queue UDP: {length_queue}", 1)
 
     def on_world_tick(self, timestamp):
         self._server_clock.tick()
@@ -1223,8 +1286,10 @@ class HUD(object):
         if (self.create_can == True and self.send_iot_data == 1):
             #print("created")
             self.can = CAN()
-            self.can_thread = CAN_THREAD(self.send_iot_data)
+            self.can_thread = CAN_THREAD(self)
             self.create_can = False
+            self.UDP_SEND = UDP_SEND(self)
+            self.UDP_RECEIVE = UDP_RECEIVE(self)
 
         if (self.send_iot_data == 1):
             # CAN Bus
@@ -1337,6 +1402,8 @@ class HUD(object):
             "GNSS:% 24s"
             % ("(% 2.6f, % 3.6f)" % (world.gnss_sensor.lat, world.gnss_sensor.lon)),
             "Height:  % 18.0f m" % t.location.z,
+            "Queue UDP: %5.1f" % len(self.queue),
+            "Queue REQ: %5.1f" % len(self.queue_request),
             "",
         ]
         if isinstance(c, carla.VehicleControl):
@@ -1646,66 +1713,66 @@ class IMUSensor(object):
 # ==============================================================================
 
 
-class RadarSensor(object):
-    def __init__(self, parent_actor):
-        self.sensor = None
-        self._parent = parent_actor
-        self.velocity_range = 7.5  # m/s
-        world = self._parent.get_world()
-        self.debug = world.debug
-        bp = world.get_blueprint_library().find("sensor.other.radar")
-        bp.set_attribute("horizontal_fov", str(35))
-        bp.set_attribute("vertical_fov", str(20))
-        self.sensor = world.spawn_actor(
-            bp,
-            carla.Transform(carla.Location(x=2.8, z=1.0), carla.Rotation(pitch=5)),
-            attach_to=self._parent,
-        )
-        # We need a weak reference to self to avoid circular reference.
-        weak_self = weakref.ref(self)
-        self.sensor.listen(
-            lambda radar_data: RadarSensor._Radar_callback(weak_self, radar_data)
-        )
-
-    @staticmethod
-    def _Radar_callback(weak_self, radar_data):
-        self = weak_self()
-        if not self:
-            return
-        # To get a numpy [[vel, altitude, azimuth, depth],...[,,,]]:
-        # points = np.frombuffer(radar_data.raw_data, dtype=np.dtype('f4'))
-        # points = np.reshape(points, (len(radar_data), 4))
-
-        current_rot = radar_data.transform.rotation
-        for detect in radar_data:
-            azi = math.degrees(detect.azimuth)
-            alt = math.degrees(detect.altitude)
-            # The 0.25 adjusts a bit the distance so the dots can
-            # be properly seen
-            fw_vec = carla.Vector3D(x=detect.depth - 0.25)
-            carla.Transform(
-                carla.Location(),
-                carla.Rotation(
-                    pitch=current_rot.pitch + alt,
-                    yaw=current_rot.yaw + azi,
-                    roll=current_rot.roll,
-                ),
-            ).transform(fw_vec)
-
-            def clamp(min_v, max_v, value):
-                return max(min_v, min(value, max_v))
-
-            norm_velocity = detect.velocity / self.velocity_range  # range [-1, 1]
-            r = int(clamp(0.0, 1.0, 1.0 - norm_velocity) * 255.0)
-            g = int(clamp(0.0, 1.0, 1.0 - abs(norm_velocity)) * 255.0)
-            b = int(abs(clamp(-1.0, 0.0, -1.0 - norm_velocity)) * 255.0)
-            self.debug.draw_point(
-                radar_data.transform.location + fw_vec,
-                size=0.075,
-                life_time=0.06,
-                persistent_lines=False,
-                color=carla.Color(r, g, b),
-            )
+# class RadarSensor(object):
+#     def __init__(self, parent_actor):
+#         self.sensor = None
+#         self._parent = parent_actor
+#         self.velocity_range = 7.5  # m/s
+#         world = self._parent.get_world()
+#         self.debug = world.debug
+#         bp = world.get_blueprint_library().find("sensor.other.radar")
+#         bp.set_attribute("horizontal_fov", str(35))
+#         bp.set_attribute("vertical_fov", str(20))
+#         self.sensor = world.spawn_actor(
+#             bp,
+#             carla.Transform(carla.Location(x=2.8, z=1.0), carla.Rotation(pitch=5)),
+#             attach_to=self._parent,
+#         )
+#         # We need a weak reference to self to avoid circular reference.
+#         weak_self = weakref.ref(self)
+#         self.sensor.listen(
+#             lambda radar_data: RadarSensor._Radar_callback(weak_self, radar_data)
+#         )
+#
+#     @staticmethod
+#     def _Radar_callback(weak_self, radar_data):
+#         self = weak_self()
+#         if not self:
+#             return
+#         # To get a numpy [[vel, altitude, azimuth, depth],...[,,,]]:
+#         # points = np.frombuffer(radar_data.raw_data, dtype=np.dtype('f4'))
+#         # points = np.reshape(points, (len(radar_data), 4))
+#
+#         current_rot = radar_data.transform.rotation
+#         for detect in radar_data:
+#             azi = math.degrees(detect.azimuth)
+#             alt = math.degrees(detect.altitude)
+#             # The 0.25 adjusts a bit the distance so the dots can
+#             # be properly seen
+#             fw_vec = carla.Vector3D(x=detect.depth - 0.25)
+#             carla.Transform(
+#                 carla.Location(),
+#                 carla.Rotation(
+#                     pitch=current_rot.pitch + alt,
+#                     yaw=current_rot.yaw + azi,
+#                     roll=current_rot.roll,
+#                 ),
+#             ).transform(fw_vec)
+#
+#             def clamp(min_v, max_v, value):
+#                 return max(min_v, min(value, max_v))
+#
+#             norm_velocity = detect.velocity / self.velocity_range  # range [-1, 1]
+#             r = int(clamp(0.0, 1.0, 1.0 - norm_velocity) * 255.0)
+#             g = int(clamp(0.0, 1.0, 1.0 - abs(norm_velocity)) * 255.0)
+#             b = int(abs(clamp(-1.0, 0.0, -1.0 - norm_velocity)) * 255.0)
+#             self.debug.draw_point(
+#                 radar_data.transform.location + fw_vec,
+#                 size=0.075,
+#                 life_time=0.06,
+#                 persistent_lines=False,
+#                 color=carla.Color(r, g, b),
+#             )
 
 
 # ==============================================================================
