@@ -105,6 +105,7 @@ import json
 import threading
 import time
 import socket
+from pynput.keyboard import Key, Controller
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -370,8 +371,8 @@ class KeyboardControl(object):
         if isinstance(world.player, carla.Vehicle):
             self._control = carla.VehicleControl()
             self._lights = carla.VehicleLightState.NONE
-            world.player.set_autopilot(self._autopilot_enabled)
             world.player.set_light_state(self._lights)
+            world.player.set_autopilot(self._autopilot_enabled)
         elif isinstance(world.player, carla.Walker):
             self._control = carla.WalkerControl()
             self._autopilot_enabled = False
@@ -463,11 +464,11 @@ class KeyboardControl(object):
 
                             for dev in range(0, qty):
                                 time.sleep(0.5)
-                                req.create(unit, dev)
+                                # req.create(unit, dev)
 
                 elif event.key == K_k:
                     world.hud.send_iot_data = 0
-                    world.hud.can_thread.stop_thread()
+                    world.hud.can.stop_thread()
                     print("FINISHING SERIES...")
                 elif event.key == K_BACKQUOTE:
                     world.camera_manager.next_sensor()
@@ -549,8 +550,9 @@ class KeyboardControl(object):
                         self._control.gear = max(-1, self._control.gear - 1)
                     elif self._control.manual_gear_shift and event.key == K_PERIOD:
                         self._control.gear = self._control.gear + 1
-                    elif event.key == K_p and not pygame.key.get_mods() & KMOD_CTRL:
+                    elif (event.key == K_p or world.hud.press_p == True) and not pygame.key.get_mods() & KMOD_CTRL:
                         self._autopilot_enabled = not self._autopilot_enabled
+                        print("autopilot - ", self._autopilot_enabled)
                         world.player.set_autopilot(self._autopilot_enabled)
                         world.hud.notification(
                             "Autopilot %s"
@@ -908,11 +910,11 @@ def get_unit_request(id, name):
 # ==============================================================================
 # -- CAN THREAD ----------------------------------------------------------------
 # ==============================================================================
-def update(running, hud):
+def update(can, hud):
     print('CAN Thread[Started]')
 
-    db = cantools.database.load_file("./_honda_2017.dbc")
-    can_bus = can.interface.Bus("vcan0", bustype="socketcan")
+    #db = cantools.database.load_file("./_honda_2017.dbc")
+    #can_bus = can.interface.Bus("vcan0", bustype="socketcan")
 
     speed = 0
     speed_ant = 0
@@ -941,33 +943,26 @@ def update(running, hud):
     colision_id = 469
 
     while True:
-        time.sleep(1)
-
-        if (running  == True):
-            break
-
         if (hud.send_iot_data == 1):
-            message = can_bus.recv()
+            message = hud.can.can_bus.recv()
 
             # SPEED
             if (message.arbitration_id == speed_id):
-                speed = float(db.decode_message(message.arbitration_id, message.data)['WHEEL_SPEED'])
+                speed = float(can.db.decode_message(message.arbitration_id, message.data)['WHEEL_SPEED'])
                 currentTime = int(time.time()) * (10 ** 6)
 
-                #if (speed_ant != speed):
-                #    speed_ant = speed
                 unit = get_unit_request(speed_id, 'speed')
 
-                hud.queue_item("speed", currentTime, speed, unit, 0)
+                # hud.send_item("speed", currentTime, speed, unit, 0)
 
             # GYROSCOPE
             if (message.arbitration_id == gyroscope_id):
-                gyro_x = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_X'])
-                gyro_y = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Y'])
-                gyro_z = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Z'])
-                gyro_x_signal = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_X_SIG'])
-                gyro_y_signal = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Y_SIG'])
-                gyro_z_signal = float(db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Z_SIG'])
+                gyro_x = float(can.db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_X'])
+                gyro_y = float(can.db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Y'])
+                gyro_z = float(can.db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Z'])
+                gyro_x_signal = float(can.db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_X_SIG'])
+                gyro_y_signal = float(can.db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Y_SIG'])
+                gyro_z_signal = float(can.db.decode_message(message.arbitration_id, message.data)['GYROSCOPE_Z_SIG'])
 
                 if gyro_x_signal > 0:
                     gyro_x = gyro_x * -1
@@ -981,22 +976,20 @@ def update(running, hud):
                 gyro = str(gyro_x) + '|' + str(gyro_y) + '|' + str(gyro_z)
                 currentTime = int(time.time()) * (10 ** 6)
 
-                #if (gyro != gyro_ant):
-                #    gyro_ant = gyro
                 unit = get_unit_request(gyroscope_id, 'gyroscope')
 
-                hud.queue_item("gyro_x", currentTime, speed, unit, 1)
-                hud.queue_item("gyro_y", currentTime, speed, unit, 2)
-                hud.queue_item("gyro_z", currentTime, speed, unit, 3)
+                # hud.send_item("gyro_x", currentTime, speed, unit, 1)
+                # hud.send_item("gyro_y", currentTime, speed, unit, 2)
+                # hud.send_item("gyro_z", currentTime, speed, unit, 3)
 
             # ACCELERO
             if (message.arbitration_id == accelerometer_id):
-                accel_x = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_X'])
-                accel_y = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Y'])
-                accel_z = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Z'])
-                accel_x_signal = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_X_SIG'])
-                accel_y_signal = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Y_SIG'])
-                accel_z_signal = float(db.decode_message(message.arbitration_id, message.data)['ACCELERO_Z_SIG'])
+                accel_x = float(can.db.decode_message(message.arbitration_id, message.data)['ACCELERO_X'])
+                accel_y = float(can.db.decode_message(message.arbitration_id, message.data)['ACCELERO_Y'])
+                accel_z = float(can.db.decode_message(message.arbitration_id, message.data)['ACCELERO_Z'])
+                accel_x_signal = float(can.db.decode_message(message.arbitration_id, message.data)['ACCELERO_X_SIG'])
+                accel_y_signal = float(can.db.decode_message(message.arbitration_id, message.data)['ACCELERO_Y_SIG'])
+                accel_z_signal = float(can.db.decode_message(message.arbitration_id, message.data)['ACCELERO_Z_SIG'])
 
                 if accel_x_signal > 0:
                     accel_x = accel_x * -1
@@ -1010,22 +1003,19 @@ def update(running, hud):
                 accel = str(accel_x) + '|' + str(accel_y) + '|' + str(accel_z)
                 currentTime = int(time.time()) * (10 ** 6)
 
-                #if (accel != accel_ant):
-                #    accel_ant = accel
-
                 unit = get_unit_request(accelerometer_id, 'accelerometer')
 
-                hud.queue_item("accel_x", currentTime, accel_x, unit, 0)
-                hud.queue_item("accel_y", currentTime, accel_y, unit, 1)
-                hud.queue_item("accel_z", currentTime, accel_z, unit, 2)
+                # hud.send_item("accel_x", currentTime, accel_x, unit, 0)
+                # hud.send_item("accel_y", currentTime, accel_y, unit, 1)
+                # hud.send_item("accel_z", currentTime, accel_z, unit, 2)
 
             # GNSS
             if (message.arbitration_id == gnss_id):
-                gnss_alt = float(db.decode_message(message.arbitration_id, message.data)['GNSS_ALTITUDE'])
-                gnss_lat = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LATITUDE']) / 1000
-                gnss_lon = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LONGITUDE']) / 1000
-                gnss_lat_signal = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LATITUDE_SIG'])
-                gnss_lon_signal = float(db.decode_message(message.arbitration_id, message.data)['GNSS_LONGITUDE_SIG'])
+                gnss_alt = float(can.db.decode_message(message.arbitration_id, message.data)['GNSS_ALTITUDE'])
+                gnss_lat = float(can.db.decode_message(message.arbitration_id, message.data)['GNSS_LATITUDE']) / 1000
+                gnss_lon = float(can.db.decode_message(message.arbitration_id, message.data)['GNSS_LONGITUDE']) / 1000
+                gnss_lat_signal = float(can.db.decode_message(message.arbitration_id, message.data)['GNSS_LATITUDE_SIG'])
+                gnss_lon_signal = float(can.db.decode_message(message.arbitration_id, message.data)['GNSS_LONGITUDE_SIG'])
 
 
                 if gnss_lat_signal > 0:
@@ -1043,129 +1033,224 @@ def update(running, hud):
                 gnss = str(gnss_alt) + '|' + str(gnss_lat) + '|' + str(gnss_lon)
                 currentTime = int(time.time()) * (10 ** 6)
 
-                #if (gnss != gnss_ant):
-                #    gnss_ant = gnss
-
                 unit_alt = get_unit_request(gnss_id, 'gnss-altitude')
                 unit_lat = get_unit_request(gnss_id, 'gnss-latitude')
                 unit_lon = get_unit_request(gnss_id, 'gnss-longitude')
 
-                hud.queue_item("gnss-altitude",  currentTime, gnss_alt, unit_alt, 0)
-                hud.queue_item("gnss-latitude",  currentTime, gnss_lat, unit_lat, 0)
-                hud.queue_item("gnss-longitude", currentTime, gnss_lon, unit_lon, 0)
+                # hud.send_item("gnss-altitude",  currentTime, gnss_alt, unit_alt, 0)
+                # hud.send_item("gnss-latitude",  currentTime, gnss_lat, unit_lat, 0)
+                # hud.send_item("gnss-longitude", currentTime, gnss_lon, unit_lon, 0)
 
             # GEAR
             if (message.arbitration_id == gear_id):
-                gear = float(db.decode_message(message.arbitration_id, message.data)['GEAR']) - 1
+                gear = float(can.db.decode_message(message.arbitration_id, message.data)['GEAR']) - 1
                 currentTime = int(time.time()) * (10 ** 6)
-
-                # if (gear_ant != gear):
-                #     gear_ant = gear
 
                 unit = get_unit_request(gear_id, 'gear')
 
-                hud.queue_item("gear", currentTime, gear, unit, 0)
+                # hud.send_item("gear", currentTime, gear, unit, 0)
 
             # VEHICLE COLISION
             if (message.arbitration_id == colision_id):
-                vehicle_col = float(db.decode_message(message.arbitration_id, message.data)['COLISION'])
+                vehicle_col = float(can.db.decode_message(message.arbitration_id, message.data)['COLISION'])
                 currentTime = int(time.time()) * (10 ** 6)
-
-                # if (vehicle_col_ant != vehicle_col):
-                #     vehicle_col_ant = vehicle_col
 
                 unit = get_unit_request(colision_id, 'colision')
 
-                hud.queue_item("colision", currentTime, vehicle_col, unit, 1)
+                hud.send_item("colision", currentTime, vehicle_col, unit, 1)
 
+# ==============================================================================
+# -- MANEGER --------------------------------------------------------------
+# ==============================================================================
+def maneger_listening(manager, running):
+    #udp_maneger_port = 5000
+    print(f"MANAGER LISTENING - IP[{manager.manager_ip}]|PORT[{manager.manager_port}]")
 
-class CAN_THREAD(object):
+    manager.sock.bind((manager.manager_ip, manager.manager_port))
+
+    while True:
+        if (running == True):
+            break
+
+        data_bin, addr = manager.sock.recvfrom(1024)
+
+        manager.maneger_action(data_bin)
+
+class MANEGER(object):
     def __init__(self, hud):
+        self.manager_port = 5000
+        self.manager_ip = UDP_IP # "127.0.0
         self.running = False
-        self.thread = threading.Thread(name='update', target=update, args=(lambda: self.running, hud))
+        self.cars = []
+        self.sock = socket.socket(socket.AF_INET, # Internet
+                                  socket.SOCK_DGRAM) # UDP
+        self.thread = threading.Thread(name='maneger_listening', target=maneger_listening, args=(self, lambda: self.running))
         self.thread.start()
 
     def stop_thread(self):
         self.running = True
         self.thread.join()
 
-# ==============================================================================
-# -- UDP --------------------------------------------------------------
-# ==============================================================================
+    def maneger_action (self, data_bin):
+        data = json.loads(data_bin)
 
-def udp_sending(running, hud):
-    print(f"UDP SENDING... {UDP_IP}")
-    sock = socket.socket(socket.AF_INET,    # Internet
-                         socket.SOCK_DGRAM) # UDP
+        action = data["action"]
+        body = data["body"]
+        ports = []
 
-    while True:
-        if (running == True):
-            break
+        if (action == "append"):
+            print("MANAGER - CAR CREATED")
 
-        if len(hud.queue) > 0:
-            json = hud.queue.pop(0)
+            port = body["port"]
+            ports.append(port)
 
-            if len(json) > 0:
-                sock.sendto(str.encode(json), (UDP_IP, UDP_PORT))
+            self.cars.append(body)
 
-def udp_receiving(running, hud):
-    print(f"UDP RECEIVING... {UDP_IP}")
+            #reponse to the client
+            response_ok = self.maneger_message("ok", None, None, None, None, None)
+
+            self.maneger_response(response_ok, ports)
+
+        elif (action == "event"):
+            pos_x = body["x"]
+            pos_y = body["y"]
+            pos_z = body["z"]
+            id = body["id"]
+            name = body["name"]
+
+            print(f"MANAGER - COLISION at [{pos_x}][{pos_y}][{pos_z}]")
+
+            response_event = self.maneger_message(action, pos_x, pos_y, pos_z, id, name)
+
+            ports = self.maneger_ports()
+
+            self.maneger_response(response_event, ports)
+
+        elif (action == "exit"):
+            data_body = json.loads(body)
+
+            port = data_body["port"]
+            ports.append(port)
+
+            response = self.maneger_remove(port)
+
+            #reponse to the client
+            response_ok = self.maneger_message("ok", None, None, None, None, None)
+
+            self.maneger_response(response_ok, ports)
+
+    def maneger_response (self, message, ports):
+        for port in ports:
+            s = str(port)
+            ip = "127.0.0."+str(int(s[-1])+1)
+
+            print(f"PORT[{port}]IP[{ip}]:{message}")
+            self.sock.sendto(str.encode(message), (ip, port))
+
+    def maneger_message(self, action, x, y, z, id, name):
+        if (action == "ok"):
+            message = '{ "action": "ok", "body": {}}'
+        elif (action == "bad"):
+            message = '{ "action": "bad", "body": {}}'
+        elif (action == "event"):
+            message = '{ "action": "event", "body": {"x": '+str(x)+', "y": '+str(y)+', "z": '+str(z)+', "id": '+str(id)+', "name": "'+name+'"}}'
+
+        return message
+
+    def maneger_ports(self):
+        ports = []
+
+        print("CARS: ", self.cars)
+
+        for i in range(0,len(self.cars)):
+            body = self.cars[i]
+
+            port = body["port"]
+
+            ports.append(port)
+
+        return ports
+
+    def maneger_remove(self, port_ref):
+        cars = []
+        response = False
+
+        for i in range(0,len(self.cars)):
+            body = self.cars[i]
+
+            port = data_body["port"]
+
+            if (port_ref != port):
+                cars.append(body)
+                response = True
+
+        self.cars = cars
+
+        return response
+
+def car_listening(car, running):
+    print(f"CAR LISTENING - IP[{car.ip}]|PORT[{car.port}]")
     sock = socket.socket(socket.AF_INET, # Internet
-                         socket.SOCK_DGRAM) # UDP
-    sock.bind((UDP_IP, UDP_PORT))
+                                  socket.SOCK_DGRAM) # UDP
+    sock.bind((car.ip, car.port))
 
     while True:
         if (running == True):
             break
 
-        data_bin, addr = sock.recvfrom(1024) # buffer size is 1024 bytes
+        data_bin, addr = sock.recvfrom(1024)
 
-        if len(data_bin) > 0:
-            hud.queue_request.append(data_bin)
+        car.car_data(data_bin)
 
-def udp_receiving_req(running, hud):
-    req = REQUEST()
-
-    while True:
-        if (running == True):
-            break
-
-        if len(hud.queue_request) > 0:
-            data_bin = hud.queue_request.pop(0)
-            data_str = data_bin.decode('utf8').replace("'", '"')
-
-            data = json.loads(data_str)
-
-            time = data["t"]
-            value = data["value"]
-            unit = data["unit"]
-            dev = data["dev"]
-
-            req.send(time, value, unit, dev)
-
-class UDP_SEND(object):
+class CAR(object):
     def __init__(self, hud):
+        port_car = int(f"500{hud.car_num}")
+        ip_car = f"127.0.0.{hud.car_num+1}"
+        self.port_manager = 5000
+        self.port = port_car
+        self.ip = ip_car
+        self.ip_manager = UDP_IP
+        self.sock = socket.socket(socket.AF_INET, # Internet
+                                  socket.SOCK_DGRAM) # UDP
+        self.response = []
         self.running = False
-        self.thread = threading.Thread(name='udp_sending', target=udp_sending, args=(lambda: self.running, hud))
+        self.thread = threading.Thread(name='car_listening', target=car_listening, args=(self, lambda: self.running))
         self.thread.start()
+        self.hud = hud
 
-    def stop_thread(self):
-        self.running = True
-        self.thread.join()
+    def car_created(self):
+        message = '{"action": "append", "body": {"name": "'+self.hud.car_description+'", "port": '+str(self.port)+'}}'
 
-class UDP_RECEIVE(object):
-    def __init__(self, hud):
-        self.running = False
-        self.thread = threading.Thread(name='udp_receiving', target=udp_receiving, args=(lambda: self.running, hud))
-        self.thread.start()
+        self.sock.sendto(str.encode(message), (self.ip_manager, self.port_manager))
 
-        self.thread_request = threading.Thread(name='udp_receiving_req', target=udp_receiving_req, args=(lambda: self.running, hud))
-        self.thread_request.start()
+    def car_data (self, data_bin):
+        data_str = data_bin.decode('utf8')
 
-    def stop_thread(self):
-        self.running = True
-        self.thread.join()
-        self.thread_request.join()
+        data = json.loads(data_bin)
+
+        action = data["action"]
+        body = data["body"]
+
+        if (action == "ok"):
+            print("CAR RESPONSE: OK")
+            #self.response.pop(0)
+        elif (action == "event"):
+            pos_x = body["x"]
+            pos_y = body["y"]
+            pos_z = body["z"]
+            id = body["id"]
+            name = body["name"]
+
+            my_pos_x = self.hud.pos_x
+            my_pos_y = self.hud.pos_y
+            my_pos_z = self.hud.pos_z
+
+            distance = math.sqrt((pos_x - my_pos_x) ** 2 + (pos_x - my_pos_x) ** 2 + (pos_x - my_pos_x) ** 2)
+
+            if (distance > 200):
+                print(f"CAR RESPONSE: WARNING, STOP CAR! Colision Detected in {distance} meters from: {name} id:{id}. ")
+                self.hud.press_p = True
+                time.sleep(1)
 
 # ==============================================================================
 # -- CAN (INSERT) --------------------------------------------------------------
@@ -1173,10 +1258,14 @@ class UDP_RECEIVE(object):
 
 
 class CAN(object):
-    def __init__(self):
+    def __init__(self, hud):
         #self.db = cantools.database.load_file("/home/leonardo/Documents/GitHub/opendbc/generator/honda/honda_clarity_hybrid_2018_can.dbc")
+        vcan = f"vcan{hud.car_num}"
+
+        self.create_vcan(vcan)
+
         self.db = cantools.database.load_file("./_honda_2017.dbc")
-        self.can_bus = can.interface.Bus("vcan0", bustype="socketcan")
+        self.can_bus = can.interface.Bus(vcan, bustype="socketcan")
 
         self.speed_message = self.db.get_message_by_name('WHEEL_SPEEDS')
         self.gear_message = self.db.get_message_by_name('GEAR_POS')
@@ -1186,6 +1275,33 @@ class CAN(object):
         self.vehicle_colision_message = self.db.get_message_by_name('VEHICLE_COLISION')
 
         print("CAN [Started]")
+
+        self.running = False
+        self.can_thread(hud)
+
+    def create_vcan(self, vcan):
+        import subprocess
+
+        # for i in range(0, 3):
+        #     if (i==0):
+        #         bashCommand = "sudo modprobe vcan "
+        #     elif(i==1):
+        #         bashCommand = f"sudo ip link add dev {vcan} type vcan "
+        #     else:
+        #         bashCommand = f"sudo ip link set up {vcan} "
+        bashCommand = f"sudo modprobe vcan \n ip link add dev {vcan} type vcan \n ip link set up {vcan}"
+
+        process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
+        output, error = process.communicate()
+
+    def can_thread(self, hud):
+        self.running = False
+        self.thread = threading.Thread(name='update', target=update, args=(self, hud))
+        self.thread.start()
+
+    def stop_thread(self):
+        self.running = True
+        self.thread.join()
 
     def send_speed(self, speed):
         data = self.speed_message.encode({'WHEEL_SPEED': speed})
@@ -1212,7 +1328,6 @@ class CAN(object):
     def send_gnss(self, gnss_altitude, gnss_latitude, gnss_latitude_sig, gnss_longitude, gnss_longitude_sig):
         #print("GNSS_SEND: "+str(gnss_altitude)+"|"+str(gnss_latitude_sig)+ '_'+str(gnss_latitude)+"|"+str(gnss_longitude_sig)+"_"+str(gnss_longitude))
 
-
         data = self.gnss_message.encode({'GNSS_ALTITUDE': float(gnss_altitude), 'GNSS_LATITUDE': float(gnss_latitude), 'GNSS_LONGITUDE': float(gnss_longitude), 'GNSS_LATITUDE_SIG': gnss_latitude_sig, 'GNSS_LONGITUDE_SIG': gnss_longitude_sig})
 
         message = can.Message(arbitration_id=self.gnss_message.frame_id, data=data)
@@ -1229,7 +1344,7 @@ class CAN(object):
 
 
 class HUD(object):
-    def __init__(self, width, height):
+    def __init__(self, width, height, args):
         self.dim = (width, height)
         font = pygame.font.Font(pygame.font.get_default_font(), 20)
         font_name = "courier" if os.name == "nt" else "mono"
@@ -1248,16 +1363,31 @@ class HUD(object):
         self._server_clock = pygame.time.Clock()
         self.create_can = True
         self.send_iot_data = 0
-        self.queue = []
-        self.queue_request = []
+        self.car_id = -1
+        self.car_description = ""
+        self.sock = socket.socket(socket.AF_INET,    # Internet
+                                  socket.SOCK_DGRAM) # UDP
+        self.car_num = args.car
+        self.maneger = args.maneger
+        self.pos_x = -1
+        self.pos_y = -1
+        self.pos_z = -1
+        self.press_p = False
 
-    def queue_item(self, name, t, value, unit, dev):
-        # json = monta_json
-        json = '{"name": "'+name+'", "t": '+str(t)+', "value": '+str(value)+', "unit": '+str(unit)+', "dev": '+str(dev)+'}'
-        self.queue.append(json)
-        length_queue = len(self.queue)
+    def press_key(self, pygame):
+        if (self.press_p):
+            newevent = pygame.event.Event(pygame.locals.KEYDOWN, unicode="p", key=pygame.locals.K_p, mod=pygame.locals.KMOD_NONE) #create the event
+            pygame.event.post(newevent) #add the event to the queue
 
-        self.notification(f"Queue UDP: {length_queue}", 1)
+    def send_item(self, name, t, value, unit, dev):
+        # MONTA JSON PARA MANAGER
+        if (unit == 0xF8000006 and dev == 1):
+            json_data = '{"action": "event", "body": {"x": '+str(self.pos_x)+', "y": '+str(self.pos_y)+', "z": '+str(self.pos_z)+', "name": "'+self.car_description+'", "id": '+str(self.car_id)+'}}'
+
+            self.sock.sendto(str.encode(json_data), (UDP_IP, 5000))
+
+        #req = REQUEST()
+        #req.send(t, value, unit, dev)
 
     def on_world_tick(self, timestamp):
         self._server_clock.tick()
@@ -1282,21 +1412,27 @@ class HUD(object):
         max_col = max(1.0, max(collision))
         collision = [x / max_col for x in collision]
         vehicles = world.world.get_actors().filter("vehicle.*")
+        self.car_id = world.player.id
+        self.pos_x = t.location.x
+        self.pos_y = t.location.y
+        self.pos_z = t.location.z
 
         if (self.create_can == True and self.send_iot_data == 1):
             #print("created")
-            self.can = CAN()
-            self.can_thread = CAN_THREAD(self)
+            self.can = CAN(self)
+            #self.can_thread = CAN_THREAD(self)
+            if (self.maneger == 1):
+                self.manager = MANEGER(self)
             self.create_can = False
-            self.UDP_SEND = UDP_SEND(self)
-            self.UDP_RECEIVE = UDP_RECEIVE(self)
+            self.car = CAR(self)
+            self.car.car_created()
 
         if (self.send_iot_data == 1):
             # CAN Bus
         	speed = 3.6 * math.sqrt(v.x ** 2 + v.y ** 2 + v.z ** 2)
         	speed = round(speed, 2)
-        	self.can.send_speed(speed)
-        	self.can.send_gear(c.gear + 1)
+        	#self.can.send_speed(speed)
+        	#self.can.send_gear(c.gear + 1)
 
         	# print("Gyro: ",world.imu_sensor.gyroscope)
 
@@ -1319,7 +1455,7 @@ class HUD(object):
         	else:
         	   gyro_z_sig = 1
 
-        	self.can.send_gyro(abs(gyro_x), gyro_x_sig, abs(gyro_y), gyro_y_sig, abs(gyro_z), gyro_z_sig)
+        	#self.can.send_gyro(abs(gyro_x), gyro_x_sig, abs(gyro_y), gyro_y_sig, abs(gyro_z), gyro_z_sig)
 
         	accel_x = float(round(world.imu_sensor.accelerometer[0], 2))
         	accel_y = float(round(world.imu_sensor.accelerometer[1], 2))
@@ -1351,7 +1487,7 @@ class HUD(object):
         	else:
         	   accel_z_sig = 1
 
-        	self.can.send_accel(abs(accel_x), accel_x_sig, abs(accel_y), accel_y_sig, abs(accel_z), accel_z_sig)
+        	#self.can.send_accel(abs(accel_x), accel_x_sig, abs(accel_y), accel_y_sig, abs(accel_z), accel_z_sig)
 
         	gnss_alt = float(round(t.location.z, 6))
         	gnss_lat = float(round(world.gnss_sensor.lat, 6) * 1000)
@@ -1383,8 +1519,8 @@ class HUD(object):
 
         	#print("GNSS: "+str(gnss_alt)+"|"+str(gnss_lat_sig)+ '_'+str(gnss_lat)+"|"+str(gnss_lon_sig)+"_"+str(gnss_lon))
 
-        	self.can.send_gnss(gnss_alt, abs(gnss_lat), gnss_lat_sig, abs(gnss_lon), gnss_lon_sig)
-
+        	#self.can.send_gnss(gnss_alt, abs(gnss_lat), gnss_lat_sig, abs(gnss_lon), gnss_lon_sig)
+        self.car_description = get_actor_display_name(world.player, truncate=20)
         self._info_text = [
             "Server:  % 16.0f FPS" % self.server_fps,
             "Client:  % 16.0f FPS" % clock.get_fps(),
@@ -1402,8 +1538,6 @@ class HUD(object):
             "GNSS:% 24s"
             % ("(% 2.6f, % 3.6f)" % (world.gnss_sensor.lat, world.gnss_sensor.lon)),
             "Height:  % 18.0f m" % t.location.z,
-            "Queue UDP: %5.1f" % len(self.queue),
-            "Queue REQ: %5.1f" % len(self.queue_request),
             "",
         ]
         if isinstance(c, carla.VehicleControl):
@@ -1593,8 +1727,9 @@ class CollisionSensor(object):
     @staticmethod
     def _on_collision(weak_self, event):
         self = weak_self()
-        if not self:
-            return
+        #if not self:
+
+        #    return
         actor_type = get_actor_display_name(event.other_actor)
         self.hud.notification("Collision with %r" % actor_type)
         impulse = event.normal_impulse
@@ -1983,7 +2118,7 @@ def game_loop(args):
         display.fill((0, 0, 0))
         pygame.display.flip()
 
-        hud = HUD(args.width, args.height)
+        hud = HUD(args.width, args.height, args)
         world = World(client.get_world(), hud, args)
         controller = KeyboardControl(world, args.autopilot)
 
@@ -1994,6 +2129,7 @@ def game_loop(args):
                 return
             world.tick(clock)
             world.render(display)
+            world.hud.press_key(pygame)
             pygame.display.flip()
 
     finally:
@@ -2025,8 +2161,8 @@ def main():
     argparser.add_argument(
         "--host",
         metavar="H",
-        default="127.0.0.1",
-        help="IP of the host server (default: 127.0.0.1)",
+        default="127.0.0.99",
+        help="IP of the host server (default: 127.0.0.99)",
     )
     argparser.add_argument(
         "-p",
@@ -2062,6 +2198,18 @@ def main():
         default=2.2,
         type=float,
         help="Gamma correction of the camera (default: 2.2)",
+    )
+    argparser.add_argument(
+        "--maneger",
+        default=1,
+        type=int,
+        help="Is Maneger (default: True)",
+    )
+    argparser.add_argument(
+        "--car",
+        default=1,
+        type=int,
+        help="Num of car (default: 1)",
     )
     args = argparser.parse_args()
 
